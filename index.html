@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meal Planner</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Meal Planner</h1>
+    <p class="subtitle">Weekly prep tracker for two</p>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="this-week">This Week</button>
+    <button class="tab" data-tab="history">History</button>
+    <button class="tab" data-tab="overdue">Haven't Made</button>
+  </nav>
+
+  <!-- THIS WEEK TAB -->
+  <section id="this-week" class="tab-content active">
+    <div class="week-header">
+      <h2 id="week-label">Week of ...</h2>
+      <button class="btn-secondary" id="clear-week-btn">Clear Week</button>
+    </div>
+
+    <div class="add-meal-row">
+      <input
+        id="meal-input"
+        type="text"
+        placeholder="Add a meal (e.g. Chicken Stir Fry)"
+        autocomplete="off"
+      />
+      <div id="meal-suggestions" class="suggestions"></div>
+      <button class="btn-primary" id="add-meal-btn">Add</button>
+    </div>
+
+    <ul id="this-week-list" class="meal-list"></ul>
+
+    <div class="week-actions">
+      <button class="btn-primary" id="save-week-btn">Save Week to History</button>
+    </div>
+  </section>
+
+  <!-- HISTORY TAB -->
+  <section id="history" class="tab-content">
+    <div class="history-nav">
+      <button class="btn-icon" id="prev-week-btn">&#8249;</button>
+      <h2 id="history-week-label">Week of ...</h2>
+      <button class="btn-icon" id="next-week-btn">&#8250;</button>
+    </div>
+    <ul id="history-list" class="meal-list"></ul>
+    <p id="history-empty" class="empty-state" style="display:none">No meals logged for this week.</p>
+    <div class="history-actions" id="history-actions" style="display:none">
+      <button class="btn-danger" id="delete-week-btn">Delete This Week</button>
+    </div>
+  </section>
+
+  <!-- OVERDUE / RECENCY TAB -->
+  <section id="overdue" class="tab-content">
+    <div class="overdue-header">
+      <h2>Haven't Made in 3+ Weeks</h2>
+      <label class="threshold-label">
+        Threshold:
+        <input id="threshold-input" type="number" min="1" max="52" value="3" />
+        weeks
+      </label>
+    </div>
+    <ul id="overdue-list" class="meal-list"></ul>
+    <p id="overdue-empty" class="empty-state" style="display:none">All meals have been made recently — great job!</p>
+  </section>
+
+  <!-- MODAL -->
+  <div id="modal-overlay" class="modal-overlay" style="display:none">
+    <div class="modal">
+      <p id="modal-message"></p>
+      <div class="modal-buttons">
+        <button class="btn-primary" id="modal-confirm">Confirm</button>
+        <button class="btn-secondary" id="modal-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
