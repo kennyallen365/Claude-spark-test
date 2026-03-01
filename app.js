@@ -68,15 +68,19 @@ function loadData() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      if (!parsed.meals)        parsed.meals        = [];
+      if (!parsed.weeklyPlans)  parsed.weeklyPlans  = [];
       if (!parsed.groceryList)  parsed.groceryList  = { items: [] };
       if (!parsed.groceryKnown) parsed.groceryKnown = [];
       // Migrate: ensure all plans have grocerySnapshot field
-      (parsed.weeklyPlans || []).forEach(p => {
+      parsed.weeklyPlans.forEach(p => {
         if (!("grocerySnapshot" in p)) p.grocerySnapshot = null;
       });
       return parsed;
     }
-  } catch (_) {}
+  } catch (err) {
+    console.error("loadData failed:", err);
+  }
   return { meals: [], weeklyPlans: [], groceryList: { items: [] }, groceryKnown: [] };
 }
 
@@ -233,12 +237,16 @@ function renderThisWeek() {
 }
 
 document.getElementById("this-week-prev-btn").addEventListener("click", () => {
-  thisWeekDate = addWeeks(thisWeekDate, -1);
-  renderThisWeek();
+  try {
+    thisWeekDate = addWeeks(thisWeekDate, -1);
+    renderThisWeek();
+  } catch (err) { console.error("this-week-prev:", err); }
 });
 document.getElementById("this-week-next-btn").addEventListener("click", () => {
-  thisWeekDate = addWeeks(thisWeekDate, 1);
-  renderThisWeek();
+  try {
+    thisWeekDate = addWeeks(thisWeekDate, 1);
+    renderThisWeek();
+  } catch (err) { console.error("this-week-next:", err); }
 });
 
 // -- Add meal input & autocomplete --
@@ -443,12 +451,16 @@ function renderHistoryGrocery(plan) {
 }
 
 document.getElementById("prev-week-btn").addEventListener("click", () => {
-  historyDate = addWeeks(historyDate, -1);
-  renderHistory();
+  try {
+    historyDate = addWeeks(historyDate, -1);
+    renderHistory();
+  } catch (err) { console.error("history-prev:", err); }
 });
 document.getElementById("next-week-btn").addEventListener("click", () => {
-  historyDate = addWeeks(historyDate, 1);
-  renderHistory();
+  try {
+    historyDate = addWeeks(historyDate, 1);
+    renderHistory();
+  } catch (err) { console.error("history-next:", err); }
 });
 
 document.getElementById("history-view-select").addEventListener("change", () => {
@@ -770,4 +782,5 @@ document.getElementById("modal-overlay").addEventListener("click", e => {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
+console.log("[MealPlanner v3] loaded. thisWeekDate =", thisWeekDate);
 renderThisWeek();
