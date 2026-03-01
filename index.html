@@ -16,6 +16,7 @@
     <button class="tab active" data-tab="this-week">This Week</button>
     <button class="tab" data-tab="history">History</button>
     <button class="tab" data-tab="overdue">Haven't Made</button>
+    <button class="tab" data-tab="grocery">Grocery</button>
   </nav>
 
   <!-- THIS WEEK TAB -->
@@ -69,6 +70,46 @@
     </div>
     <ul id="overdue-list" class="meal-list"></ul>
     <p id="overdue-empty" class="empty-state" style="display:none">All meals have been made recently — great job!</p>
+  </section>
+
+  <!-- GROCERY TAB -->
+  <section id="grocery" class="tab-content">
+    <div class="grocery-header">
+      <h2>Grocery List</h2>
+      <div class="grocery-header-actions">
+        <button class="btn-secondary" id="clear-checked-btn">Clear Checked</button>
+        <button class="btn-danger" id="new-list-btn">New List</button>
+      </div>
+    </div>
+
+    <div class="add-grocery-row">
+      <div class="add-grocery-inputs">
+        <div class="grocery-input-wrap">
+          <input
+            id="grocery-input"
+            type="text"
+            placeholder="Item name"
+            autocomplete="off"
+          />
+          <div id="grocery-suggestions" class="suggestions"></div>
+        </div>
+        <select id="grocery-section-select">
+          <option value="">Section...</option>
+          <option value="Fruit &amp; Produce">Fruit &amp; Produce</option>
+          <option value="Bakery">Bakery</option>
+          <option value="Snacks">Snacks</option>
+          <option value="Drinks">Drinks</option>
+          <option value="Pantry">Pantry</option>
+          <option value="Meats">Meats</option>
+          <option value="Frozen &amp; Dairy">Frozen &amp; Dairy</option>
+          <option value="Misc">Misc</option>
+        </select>
+      </div>
+      <button class="btn-primary" id="add-grocery-btn">Add</button>
+    </div>
+
+    <div id="grocery-sections"></div>
+    <p id="grocery-empty" class="empty-state" style="display:none">List is empty — start adding items above.</p>
   </section>
 
   <!-- MODAL -->
