@@ -4,7 +4,12 @@
  * Data model (localStorage key: "mealPlanner"):
  * {
  *   meals: [{ id, name, dates: [ISO-date, ...] }],
- *   weeklyPlans: [{ weekStart: ISO-date, mealIds: [id, ...], checked: { id: bool } }],
+ *   weeklyPlans: [{
+ *     weekStart: ISO-date,          // Sunday
+ *     mealIds: [id, ...],
+ *     checked: { id: bool },
+ *     grocerySnapshot: [{ name, section, checked }] | null
+ *   }],
  *   groceryList: { items: [{ id, name, section, checked }] },
  *   groceryKnown: [{ name, section }]   // autocomplete history
  * }
@@ -18,29 +23,40 @@ function uuid() {
     : Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-/** Return Monday (ISO date string) of the week containing `date`. */
-function weekStart(date) {
-  const d = new Date(date);
-  const day = d.getDay(); // 0=Sun
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  return d.toISOString().slice(0, 10);
+function toLocalISO(d) {
+  const y  = d.getFullYear();
+  const m  = String(d.getMonth() + 1).padStart(2, "0");
+  const dy = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dy}`;
 }
 
-/** Format a week-start date as "Mon Feb 24, 2026". */
+/** Return the Sunday (local ISO date) of the week containing `isoDate`. */
+function weekStart(isoDate) {
+  const d = new Date(isoDate + "T12:00:00"); // noon avoids DST edge cases
+  d.setDate(d.getDate() - d.getDay());        // getDay() 0=Sun → subtract to land on Sunday
+  return toLocalISO(d);
+}
+
+/** Add n weeks to an ISO date string. */
+function addWeeks(isoDate, n) {
+  const d = new Date(isoDate + "T12:00:00");
+  d.setDate(d.getDate() + n * 7);
+  return toLocalISO(d);
+}
+
+/** Format a week-start ISO date as "Sun, Feb 22, 2026". */
 function formatWeek(isoDate) {
   const d = new Date(isoDate + "T12:00:00");
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 }
 
-/** Days between two ISO date strings (absolute). */
+/** Absolute days between two ISO date strings. */
 function daysBetween(a, b) {
-  const msPerDay = 86400000;
-  return Math.round(Math.abs(new Date(a) - new Date(b)) / msPerDay);
+  return Math.round(Math.abs(new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) / 86400000);
 }
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  return toLocalISO(new Date());
 }
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -52,8 +68,12 @@ function loadData() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (!parsed.groceryList) parsed.groceryList = { items: [] };
+      if (!parsed.groceryList)  parsed.groceryList  = { items: [] };
       if (!parsed.groceryKnown) parsed.groceryKnown = [];
+      // Migrate: ensure all plans have grocerySnapshot field
+      (parsed.weeklyPlans || []).forEach(p => {
+        if (!("grocerySnapshot" in p)) p.grocerySnapshot = null;
+      });
       return parsed;
     }
   } catch (_) {}
@@ -67,8 +87,15 @@ function saveData(data) {
 // ── App state ─────────────────────────────────────────────────────────────────
 
 let data = loadData();
-let currentHistoryIndex = 0; // index into sorted weeklyPlans array (0 = most recent)
-let overdueThreshold = 3;    // weeks
+let thisWeekDate  = weekStart(today()); // week being viewed/edited in This Week tab
+let historyDate   = weekStart(today()); // week being viewed in History tab
+let overdueThreshold = 3;              // weeks
+
+// Init historyDate to the most recent week with any plan data
+{
+  const dates = data.weeklyPlans.map(p => p.weekStart).sort();
+  if (dates.length) historyDate = dates[dates.length - 1];
+}
 
 // ── Meal helpers ──────────────────────────────────────────────────────────────
 
@@ -86,34 +113,49 @@ function getOrCreateMeal(name) {
   return meal;
 }
 
-/** Most recent date this meal was recorded (from weeklyPlans that are saved). */
 function lastMadeDate(meal) {
   if (!meal.dates || meal.dates.length === 0) return null;
   return meal.dates.slice().sort().reverse()[0];
 }
 
-/** How many days ago was this meal last made? */
 function daysSinceLastMade(meal) {
   const last = lastMadeDate(meal);
-  if (!last) return null;
-  return daysBetween(last, today());
+  return last ? daysBetween(last, today()) : null;
 }
 
 // ── Weekly plan helpers ───────────────────────────────────────────────────────
 
-function getThisWeekPlan() {
-  const ws = weekStart(today());
-  let plan = data.weeklyPlans.find(p => p.weekStart === ws);
+/** Get (or lazily create) the plan object for a given week-start date. */
+function getWeekPlan(dateStr) {
+  let plan = data.weeklyPlans.find(p => p.weekStart === dateStr);
   if (!plan) {
-    plan = { weekStart: ws, mealIds: [], checked: {} };
+    plan = { weekStart: dateStr, mealIds: [], checked: {}, grocerySnapshot: null };
     data.weeklyPlans.push(plan);
   }
   return plan;
 }
 
-/** Sorted weekly plans, newest first */
-function sortedPlans() {
-  return data.weeklyPlans.slice().sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
+// ── Grocery section definitions (needed by both Grocery tab and History tab) ──
+
+const GROCERY_SECTIONS = [
+  { key: "produce", label: "Fruit & Produce", icon: "🥦", css: "section-produce" },
+  { key: "bakery",  label: "Bakery",          icon: "🍞", css: "section-bakery"  },
+  { key: "snacks",  label: "Snacks",          icon: "🍿", css: "section-snacks"  },
+  { key: "drinks",  label: "Drinks",          icon: "🧃", css: "section-drinks"  },
+  { key: "pantry",  label: "Pantry",          icon: "🥫", css: "section-pantry"  },
+  { key: "meats",   label: "Meats",           icon: "🥩", css: "section-meats"   },
+  { key: "frozen",  label: "Frozen & Dairy",  icon: "🧊", css: "section-frozen"  },
+  { key: "misc",    label: "Misc",            icon: "🛒", css: "section-misc"    },
+];
+
+function sectionLabelToKey(label) {
+  const s = GROCERY_SECTIONS.find(s => s.label === label);
+  return s ? s.key : "misc";
+}
+
+function sectionKeyToLabel(key) {
+  const s = GROCERY_SECTIONS.find(s => s.key === key);
+  return s ? s.label : "Misc";
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -125,17 +167,26 @@ document.querySelectorAll(".tab").forEach(tab => {
     tab.classList.add("active");
     document.getElementById(tab.dataset.tab).classList.add("active");
     if (tab.dataset.tab === "history") renderHistory();
-    if (tab.dataset.tab === "overdue") renderOverdue();
-    if (tab.dataset.tab === "grocery") renderGrocery();
+    if (tab.dataset.tab === "overdue")  renderOverdue();
+    if (tab.dataset.tab === "grocery")  renderGrocery();
   });
 });
 
 // ── THIS WEEK tab ─────────────────────────────────────────────────────────────
 
 function renderThisWeek() {
-  const plan = getThisWeekPlan();
-  document.getElementById("week-label").textContent = "Week of " + formatWeek(plan.weekStart);
+  const currentWeek = weekStart(today());
+  const prevBtn = document.getElementById("this-week-prev-btn");
+  const nextBtn = document.getElementById("this-week-next-btn");
 
+  prevBtn.disabled = false;
+  nextBtn.disabled = thisWeekDate >= currentWeek;
+
+  const isCurrent = thisWeekDate === currentWeek;
+  document.getElementById("week-label").textContent =
+    "Week of " + formatWeek(thisWeekDate) + (isCurrent ? "" : " ↩");
+
+  const plan = getWeekPlan(thisWeekDate);
   const list = document.getElementById("this-week-list");
   list.innerHTML = "";
 
@@ -163,11 +214,7 @@ function renderThisWeek() {
     const days = daysSinceLastMade(meal);
     const lastMadeTxt = document.createElement("span");
     lastMadeTxt.className = "last-made";
-    if (days === null) {
-      lastMadeTxt.textContent = "never";
-    } else {
-      lastMadeTxt.textContent = days === 0 ? "today" : days + "d ago";
-    }
+    lastMadeTxt.textContent = days === null ? "never" : days === 0 ? "today" : days + "d ago";
 
     const del = document.createElement("button");
     del.className = "meal-delete";
@@ -185,9 +232,18 @@ function renderThisWeek() {
   });
 }
 
+document.getElementById("this-week-prev-btn").addEventListener("click", () => {
+  thisWeekDate = addWeeks(thisWeekDate, -1);
+  renderThisWeek();
+});
+document.getElementById("this-week-next-btn").addEventListener("click", () => {
+  thisWeekDate = addWeeks(thisWeekDate, 1);
+  renderThisWeek();
+});
+
 // -- Add meal input & autocomplete --
 
-const mealInput = document.getElementById("meal-input");
+const mealInput    = document.getElementById("meal-input");
 const suggestionsEl = document.getElementById("meal-suggestions");
 
 mealInput.addEventListener("input", () => {
@@ -195,7 +251,7 @@ mealInput.addEventListener("input", () => {
   suggestionsEl.innerHTML = "";
   if (q.length < 1) return;
 
-  const plan = getThisWeekPlan();
+  const plan = getWeekPlan(thisWeekDate);
   const matches = data.meals.filter(m =>
     m.name.toLowerCase().includes(q) &&
     !plan.mealIds.includes(m.id)
@@ -216,10 +272,7 @@ mealInput.addEventListener("input", () => {
 });
 
 mealInput.addEventListener("keydown", e => {
-  if (e.key === "Enter") {
-    suggestionsEl.innerHTML = "";
-    addMealToWeek(mealInput.value);
-  }
+  if (e.key === "Enter")  { suggestionsEl.innerHTML = ""; addMealToWeek(mealInput.value); }
   if (e.key === "Escape") suggestionsEl.innerHTML = "";
 });
 
@@ -236,7 +289,7 @@ function addMealToWeek(rawName) {
   const name = rawName.trim();
   if (!name) return;
   const meal = getOrCreateMeal(name);
-  const plan = getThisWeekPlan();
+  const plan = getWeekPlan(thisWeekDate);
   if (!plan.mealIds.includes(meal.id)) {
     plan.mealIds.push(meal.id);
     saveData(data);
@@ -245,40 +298,28 @@ function addMealToWeek(rawName) {
   renderThisWeek();
 }
 
-// -- Clear week --
-
 document.getElementById("clear-week-btn").addEventListener("click", () => {
-  const plan = getThisWeekPlan();
+  const plan = getWeekPlan(thisWeekDate);
   if (plan.mealIds.length === 0) return;
-  openModal(
-    "Clear all meals from this week's tracker?",
-    () => {
-      plan.mealIds = [];
-      plan.checked = {};
-      saveData(data);
-      renderThisWeek();
-    }
-  );
+  openModal("Clear all meals from this week's tracker?", () => {
+    plan.mealIds = [];
+    plan.checked = {};
+    saveData(data);
+    renderThisWeek();
+  });
 });
 
-// -- Save week to history --
-
 document.getElementById("save-week-btn").addEventListener("click", () => {
-  const plan = getThisWeekPlan();
-  if (plan.mealIds.length === 0) {
-    alert("Add some meals before saving!");
-    return;
-  }
+  const plan = getWeekPlan(thisWeekDate);
+  if (plan.mealIds.length === 0) { alert("Add some meals before saving!"); return; }
   openModal(
-    `Save this week (${formatWeek(plan.weekStart)}) to history? This records today's date for all checked meals.`,
+    `Save week of ${formatWeek(thisWeekDate)} to history? Records today's date for all checked meals.`,
     () => {
       const dateStr = today();
       plan.mealIds.forEach(id => {
         if (plan.checked[id]) {
           const meal = getMealById(id);
-          if (meal && !meal.dates.includes(dateStr)) {
-            meal.dates.push(dateStr);
-          }
+          if (meal && !meal.dates.includes(dateStr)) meal.dates.push(dateStr);
         }
       });
       saveData(data);
@@ -291,127 +332,160 @@ document.getElementById("save-week-btn").addEventListener("click", () => {
 // ── HISTORY tab ───────────────────────────────────────────────────────────────
 
 function renderHistory() {
-  const plans = sortedPlans();
-
-  // Only show weeks that have been saved (i.e. have at least one meal that has a date recorded in that week range)
-  // We show all weeklyPlans entries that have mealIds (they were created when user added meals).
-  // Sort newest first; let the user navigate back through them.
-
+  const currentWeek = weekStart(today());
   const prevBtn = document.getElementById("prev-week-btn");
   const nextBtn = document.getElementById("next-week-btn");
-  const label = document.getElementById("history-week-label");
-  const list = document.getElementById("history-list");
-  const emptyMsg = document.getElementById("history-empty");
-  const actions = document.getElementById("history-actions");
 
-  if (plans.length === 0) {
-    label.textContent = "No history yet";
-    list.innerHTML = "";
+  prevBtn.disabled = false;
+  nextBtn.disabled = historyDate >= currentWeek;
+
+  document.getElementById("history-week-label").textContent = "Week of " + formatWeek(historyDate);
+
+  const plan = data.weeklyPlans.find(p => p.weekStart === historyDate) || null;
+  const view = document.getElementById("history-view-select").value;
+
+  if (view === "meals") {
+    renderHistoryMeals(plan);
+  } else {
+    renderHistoryGrocery(plan);
+  }
+}
+
+function renderHistoryMeals(plan) {
+  const list    = document.getElementById("history-list");
+  const emptyMsg = document.getElementById("history-empty");
+  const actions  = document.getElementById("history-actions");
+
+  list.innerHTML = "";
+
+  if (!plan || plan.mealIds.length === 0) {
     emptyMsg.style.display = "block";
-    actions.style.display = "none";
-    prevBtn.disabled = true;
-    nextBtn.disabled = true;
+    emptyMsg.textContent   = "No meals logged for this week.";
+    actions.style.display  = "none";
     return;
   }
 
-  if (currentHistoryIndex >= plans.length) currentHistoryIndex = plans.length - 1;
-  if (currentHistoryIndex < 0) currentHistoryIndex = 0;
+  emptyMsg.style.display = "none";
+  actions.style.display  = "flex";
 
-  const plan = plans[currentHistoryIndex];
-  label.textContent = "Week of " + formatWeek(plan.weekStart);
-  prevBtn.disabled = currentHistoryIndex >= plans.length - 1;
-  nextBtn.disabled = currentHistoryIndex <= 0;
+  plan.mealIds.forEach(id => {
+    const meal = getMealById(id);
+    if (!meal) return;
+    const checked = !!plan.checked[id];
+
+    const li = document.createElement("li");
+    li.className = "meal-item" + (checked ? " done" : "");
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = checked;
+    cb.disabled = true;
+
+    const name = document.createElement("span");
+    name.className = "meal-name";
+    name.textContent = meal.name;
+
+    const badge = document.createElement("span");
+    badge.className = "meal-badge " + (checked ? "badge-ok" : "badge-never");
+    badge.textContent = checked ? "prepped" : "skipped";
+
+    li.append(cb, name, badge);
+    list.appendChild(li);
+  });
+}
+
+function renderHistoryGrocery(plan) {
+  const list    = document.getElementById("history-list");
+  const emptyMsg = document.getElementById("history-empty");
+  const actions  = document.getElementById("history-actions");
 
   list.innerHTML = "";
-  if (plan.mealIds.length === 0) {
+  actions.style.display = "none";
+
+  if (!plan || !plan.grocerySnapshot || plan.grocerySnapshot.length === 0) {
     emptyMsg.style.display = "block";
-    actions.style.display = "none";
-  } else {
-    emptyMsg.style.display = "none";
-    actions.style.display = "flex";
+    emptyMsg.textContent   = "No grocery list saved for this week.";
+    return;
+  }
 
-    plan.mealIds.forEach(id => {
-      const meal = getMealById(id);
-      if (!meal) return;
-      const checked = !!plan.checked[id];
+  emptyMsg.style.display = "none";
 
+  let firstSection = true;
+  GROCERY_SECTIONS.forEach(sec => {
+    const items = plan.grocerySnapshot.filter(i => i.section === sec.key);
+    if (items.length === 0) return;
+
+    const hdr = document.createElement("li");
+    hdr.className = `grocery-section-header ${sec.css} history-list-section-hdr` +
+                    (firstSection ? " first" : "");
+    hdr.innerHTML = `<span class="grocery-section-icon">${sec.icon}</span>
+                     <span class="grocery-section-name">${sec.label}</span>`;
+    list.appendChild(hdr);
+    firstSection = false;
+
+    items.forEach(item => {
       const li = document.createElement("li");
-      li.className = "meal-item" + (checked ? " done" : "");
+      li.className = "meal-item" + (item.checked ? " done" : "");
 
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.checked = checked;
+      cb.checked = item.checked;
       cb.disabled = true;
 
       const name = document.createElement("span");
       name.className = "meal-name";
-      name.textContent = meal.name;
+      name.textContent = item.name;
 
-      const badge = document.createElement("span");
-      badge.className = "meal-badge " + (checked ? "badge-ok" : "badge-never");
-      badge.textContent = checked ? "prepped" : "skipped";
-
-      li.append(cb, name, badge);
+      li.append(cb, name);
       list.appendChild(li);
     });
-  }
+  });
 }
 
 document.getElementById("prev-week-btn").addEventListener("click", () => {
-  currentHistoryIndex++;
+  historyDate = addWeeks(historyDate, -1);
   renderHistory();
 });
 document.getElementById("next-week-btn").addEventListener("click", () => {
-  currentHistoryIndex--;
+  historyDate = addWeeks(historyDate, 1);
+  renderHistory();
+});
+
+document.getElementById("history-view-select").addEventListener("change", () => {
   renderHistory();
 });
 
 document.getElementById("delete-week-btn").addEventListener("click", () => {
-  const plans = sortedPlans();
-  const plan = plans[currentHistoryIndex];
-  openModal(
-    `Delete the entry for week of ${formatWeek(plan.weekStart)}? This cannot be undone.`,
-    () => {
-      // Remove recorded dates from meals for that week (dates within that 7-day window)
-      const ws = new Date(plan.weekStart + "T00:00:00");
-      const we = new Date(ws);
-      we.setDate(we.getDate() + 7);
-
-      data.meals.forEach(meal => {
-        meal.dates = meal.dates.filter(d => {
-          const dt = new Date(d + "T00:00:00");
-          return dt < ws || dt >= we;
-        });
+  const plan = data.weeklyPlans.find(p => p.weekStart === historyDate);
+  if (!plan) return;
+  openModal(`Delete the entry for week of ${formatWeek(historyDate)}? This cannot be undone.`, () => {
+    // Remove meal dates that fall within this week's window
+    const ws = new Date(historyDate + "T00:00:00");
+    const we = new Date(ws);
+    we.setDate(we.getDate() + 7);
+    data.meals.forEach(meal => {
+      meal.dates = meal.dates.filter(d => {
+        const dt = new Date(d + "T00:00:00");
+        return dt < ws || dt >= we;
       });
-
-      data.weeklyPlans = data.weeklyPlans.filter(p => p.weekStart !== plan.weekStart);
-      saveData(data);
-      if (currentHistoryIndex >= data.weeklyPlans.length) currentHistoryIndex--;
-      if (currentHistoryIndex < 0) currentHistoryIndex = 0;
-      renderHistory();
-    }
-  );
+    });
+    data.weeklyPlans = data.weeklyPlans.filter(p => p.weekStart !== historyDate);
+    saveData(data);
+    renderHistory();
+  });
 });
 
 // ── OVERDUE / RECENCY tab ─────────────────────────────────────────────────────
 
 function renderOverdue() {
-  const list = document.getElementById("overdue-list");
+  const list     = document.getElementById("overdue-list");
   const emptyMsg = document.getElementById("overdue-empty");
   const thresholdDays = overdueThreshold * 7;
 
   const overdue = data.meals
-    .map(meal => {
-      const days = daysSinceLastMade(meal);
-      return { meal, days };
-    })
-    .filter(({ meal, days }) => {
-      // Include if never made, or made more than threshold weeks ago
-      if (days === null) return true;
-      return days >= thresholdDays;
-    })
+    .map(meal => ({ meal, days: daysSinceLastMade(meal) }))
+    .filter(({ days }) => days === null || days >= thresholdDays)
     .sort((a, b) => {
-      // Never made sorts to the end; otherwise oldest first
       if (a.days === null && b.days === null) return a.meal.name.localeCompare(b.meal.name);
       if (a.days === null) return 1;
       if (b.days === null) return -1;
@@ -442,20 +516,18 @@ function renderOverdue() {
         badge.textContent = weeksAgo === 0 ? `${days}d ago` : `${weeksAgo}w ago`;
       }
 
-      // Quick-add button to add this meal to the current week
       const addBtn = document.createElement("button");
       addBtn.className = "btn-secondary";
       addBtn.style.fontSize = ".78rem";
-      addBtn.style.padding = ".3rem .6rem";
-      addBtn.textContent = "+ This Week";
+      addBtn.style.padding  = ".3rem .6rem";
+      addBtn.textContent    = "+ This Week";
       addBtn.addEventListener("click", () => {
-        const plan = getThisWeekPlan();
+        const plan = getWeekPlan(thisWeekDate);
         if (!plan.mealIds.includes(meal.id)) {
           plan.mealIds.push(meal.id);
           saveData(data);
           renderThisWeek();
         }
-        // Switch to this-week tab
         document.querySelector("[data-tab='this-week']").click();
       });
 
@@ -467,64 +539,15 @@ function renderOverdue() {
 
 document.getElementById("threshold-input").addEventListener("change", e => {
   const val = parseInt(e.target.value, 10);
-  if (!isNaN(val) && val > 0) {
-    overdueThreshold = val;
-    renderOverdue();
-  }
-});
-
-// ── Modal ─────────────────────────────────────────────────────────────────────
-
-let modalCallback = null;
-
-function openModal(message, onConfirm) {
-  document.getElementById("modal-message").textContent = message;
-  document.getElementById("modal-overlay").style.display = "flex";
-  modalCallback = onConfirm;
-}
-
-function closeModal() {
-  document.getElementById("modal-overlay").style.display = "none";
-  modalCallback = null;
-}
-
-document.getElementById("modal-confirm").addEventListener("click", () => {
-  if (modalCallback) modalCallback();
-  closeModal();
-});
-document.getElementById("modal-cancel").addEventListener("click", closeModal);
-document.getElementById("modal-overlay").addEventListener("click", e => {
-  if (e.target === document.getElementById("modal-overlay")) closeModal();
+  if (!isNaN(val) && val > 0) { overdueThreshold = val; renderOverdue(); }
 });
 
 // ── GROCERY tab ───────────────────────────────────────────────────────────────
 
-const GROCERY_SECTIONS = [
-  { key: "produce", label: "Fruit & Produce", icon: "🥦", css: "section-produce" },
-  { key: "bakery",  label: "Bakery",          icon: "🍞", css: "section-bakery"  },
-  { key: "snacks",  label: "Snacks",          icon: "🍿", css: "section-snacks"  },
-  { key: "drinks",  label: "Drinks",          icon: "🧃", css: "section-drinks"  },
-  { key: "pantry",  label: "Pantry",          icon: "🥫", css: "section-pantry"  },
-  { key: "meats",   label: "Meats",           icon: "🥩", css: "section-meats"   },
-  { key: "frozen",  label: "Frozen & Dairy",  icon: "🧊", css: "section-frozen"  },
-  { key: "misc",    label: "Misc",            icon: "🛒", css: "section-misc"    },
-];
-
-/** Normalise a section label from the select to a section key. */
-function sectionLabelToKey(label) {
-  const s = GROCERY_SECTIONS.find(s => s.label === label);
-  return s ? s.key : "misc";
-}
-
-function sectionKeyToLabel(key) {
-  const s = GROCERY_SECTIONS.find(s => s.key === key);
-  return s ? s.label : "Misc";
-}
-
 function renderGrocery() {
-  const items = data.groceryList.items;
+  const items     = data.groceryList.items;
   const container = document.getElementById("grocery-sections");
-  const emptyMsg = document.getElementById("grocery-empty");
+  const emptyMsg  = document.getElementById("grocery-empty");
   container.innerHTML = "";
 
   if (items.length === 0) {
@@ -534,7 +557,6 @@ function renderGrocery() {
   emptyMsg.style.display = "none";
 
   GROCERY_SECTIONS.forEach(sec => {
-    // unchecked first, then checked — preserve add order within each group
     const sectionItems = items.filter(i => i.section === sec.key);
     if (sectionItems.length === 0) return;
 
@@ -591,8 +613,8 @@ function renderGrocery() {
 
 // -- Grocery autocomplete --
 
-const groceryInput    = document.getElementById("grocery-input");
-const grocerySuggest  = document.getElementById("grocery-suggestions");
+const groceryInput     = document.getElementById("grocery-input");
+const grocerySuggest   = document.getElementById("grocery-suggestions");
 const grocerySectionSel = document.getElementById("grocery-section-select");
 
 groceryInput.addEventListener("input", () => {
@@ -612,11 +634,8 @@ groceryInput.addEventListener("input", () => {
     div.addEventListener("mousedown", e => {
       e.preventDefault();
       groceryInput.value = k.name;
-      // Pre-select the matching section in the dropdown
       const label = sectionKeyToLabel(k.section);
-      Array.from(grocerySectionSel.options).forEach(opt => {
-        opt.selected = opt.value === label;
-      });
+      Array.from(grocerySectionSel.options).forEach(opt => { opt.selected = opt.value === label; });
       grocerySuggest.innerHTML = "";
       addGroceryItem();
     });
@@ -625,7 +644,7 @@ groceryInput.addEventListener("input", () => {
 });
 
 groceryInput.addEventListener("keydown", e => {
-  if (e.key === "Enter") { grocerySuggest.innerHTML = ""; addGroceryItem(); }
+  if (e.key === "Enter")  { grocerySuggest.innerHTML = ""; addGroceryItem(); }
   if (e.key === "Escape") grocerySuggest.innerHTML = "";
 });
 
@@ -648,14 +667,13 @@ function addGroceryItem() {
   if (!sectionLabel) {
     grocerySectionSel.focus();
     grocerySectionSel.style.borderColor = "var(--red)";
-    setTimeout(() => grocerySectionSel.style.borderColor = "", 1200);
+    setTimeout(() => { grocerySectionSel.style.borderColor = ""; }, 1200);
     return;
   }
 
   const sectionKey = sectionLabelToKey(sectionLabel);
-
-  // Avoid exact duplicates (case-insensitive) on active list
   const norm = name.toLowerCase();
+
   if (data.groceryList.items.some(i => i.name.toLowerCase() === norm)) {
     groceryInput.value = "";
     groceryInput.focus();
@@ -664,10 +682,10 @@ function addGroceryItem() {
 
   data.groceryList.items.push({ id: uuid(), name, section: sectionKey, checked: false });
 
-  // Update known-items for autocomplete (upsert by name)
+  // Upsert into known-items for future autocomplete
   const existing = data.groceryKnown.find(k => k.name.toLowerCase() === norm);
   if (existing) {
-    existing.section = sectionKey; // update section if they changed it
+    existing.section = sectionKey;
   } else {
     data.groceryKnown.push({ name, section: sectionKey });
   }
@@ -693,18 +711,61 @@ document.getElementById("clear-checked-btn").addEventListener("click", () => {
   );
 });
 
-// -- New list --
+// -- Done: snapshot grocery list into this week's history --
 
-document.getElementById("new-list-btn").addEventListener("click", () => {
-  if (data.groceryList.items.length === 0) return;
+document.getElementById("grocery-done-btn").addEventListener("click", () => {
+  const items = data.groceryList.items;
+  if (items.length === 0) return;
+  const currentWeek = weekStart(today());
   openModal(
-    "Start a new grocery list? This will clear all current items.",
+    `Save this grocery list to the week of ${formatWeek(currentWeek)} and clear the active list?`,
     () => {
+      const plan = getWeekPlan(currentWeek);
+      plan.grocerySnapshot = items.map(i => ({
+        name: i.name,
+        section: i.section,
+        checked: i.checked,
+      }));
       data.groceryList.items = [];
       saveData(data);
       renderGrocery();
     }
   );
+});
+
+// -- New list --
+
+document.getElementById("new-list-btn").addEventListener("click", () => {
+  if (data.groceryList.items.length === 0) return;
+  openModal("Start a new grocery list? This will clear all current items.", () => {
+    data.groceryList.items = [];
+    saveData(data);
+    renderGrocery();
+  });
+});
+
+// ── Modal ─────────────────────────────────────────────────────────────────────
+
+let modalCallback = null;
+
+function openModal(message, onConfirm) {
+  document.getElementById("modal-message").textContent = message;
+  document.getElementById("modal-overlay").style.display = "flex";
+  modalCallback = onConfirm;
+}
+
+function closeModal() {
+  document.getElementById("modal-overlay").style.display = "none";
+  modalCallback = null;
+}
+
+document.getElementById("modal-confirm").addEventListener("click", () => {
+  if (modalCallback) modalCallback();
+  closeModal();
+});
+document.getElementById("modal-cancel").addEventListener("click", closeModal);
+document.getElementById("modal-overlay").addEventListener("click", e => {
+  if (e.target === document.getElementById("modal-overlay")) closeModal();
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────
