@@ -64,14 +64,20 @@ header .subtitle { font-size: .85rem; opacity: .85; margin-top: .2rem; }
 .tab-content { display: none; max-width: 600px; margin: 1.5rem auto; padding: 0 1rem; }
 .tab-content.active { display: block; }
 
-/* ── Week header ──────────────────────────────────── */
+/* ── Week header & nav ────────────────────────────── */
 .week-header {
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+  margin-bottom: 1rem;
+}
+.week-nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 1rem;
 }
-.week-header h2, .history-nav h2 { font-size: 1.1rem; color: var(--gray-600); }
+.week-nav h2 { font-size: 1.1rem; color: var(--gray-600); }
+.week-header > .btn-secondary { align-self: flex-end; }
 
 /* ── Add meal row ─────────────────────────────────── */
 .add-meal-row {
@@ -257,8 +263,42 @@ header .subtitle { font-size: .85rem; opacity: .85; margin-top: .2rem; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: .5rem;
   margin-bottom: 1rem;
 }
+.history-nav-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .3rem;
+  flex: 1;
+  min-width: 0;
+}
+.history-nav-center h2 { font-size: 1.05rem; color: var(--gray-600); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-view-select {
+  padding: .3rem .8rem .3rem .6rem;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 20px;
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--green-dark);
+  background: #edfaf2;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23388e55' d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right .45rem center;
+  background-size: .9rem;
+  padding-right: 1.6rem;
+}
+/* History grocery section headers inside the meal-list ul */
+.history-list-section-hdr {
+  margin-top: .8rem;
+  margin-bottom: .3rem;
+}
+.history-list-section-hdr:first-child { margin-top: 0; }
 
 /* ── Week actions ─────────────────────────────────── */
 .week-actions { margin-top: 1.25rem; display: flex; justify-content: center; }
