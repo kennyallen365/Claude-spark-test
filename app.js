@@ -4,7 +4,9 @@
  * Data model (localStorage key: "mealPlanner"):
  * {
  *   meals: [{ id, name, dates: [ISO-date, ...] }],
- *   weeklyPlans: [{ weekStart: ISO-date, mealIds: [id, ...], checked: { id: bool } }]
+ *   weeklyPlans: [{ weekStart: ISO-date, mealIds: [id, ...], checked: { id: bool } }],
+ *   groceryList: { items: [{ id, name, section, checked }] },
+ *   groceryKnown: [{ name, section }]   // autocomplete history
  * }
  */
 
@@ -48,9 +50,14 @@ const STORAGE_KEY = "mealPlanner";
 function loadData() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (!parsed.groceryList) parsed.groceryList = { items: [] };
+      if (!parsed.groceryKnown) parsed.groceryKnown = [];
+      return parsed;
+    }
   } catch (_) {}
-  return { meals: [], weeklyPlans: [] };
+  return { meals: [], weeklyPlans: [], groceryList: { items: [] }, groceryKnown: [] };
 }
 
 function saveData(data) {
@@ -119,6 +126,7 @@ document.querySelectorAll(".tab").forEach(tab => {
     document.getElementById(tab.dataset.tab).classList.add("active");
     if (tab.dataset.tab === "history") renderHistory();
     if (tab.dataset.tab === "overdue") renderOverdue();
+    if (tab.dataset.tab === "grocery") renderGrocery();
   });
 });
 
@@ -487,6 +495,216 @@ document.getElementById("modal-confirm").addEventListener("click", () => {
 document.getElementById("modal-cancel").addEventListener("click", closeModal);
 document.getElementById("modal-overlay").addEventListener("click", e => {
   if (e.target === document.getElementById("modal-overlay")) closeModal();
+});
+
+// ── GROCERY tab ───────────────────────────────────────────────────────────────
+
+const GROCERY_SECTIONS = [
+  { key: "produce", label: "Fruit & Produce", icon: "🥦", css: "section-produce" },
+  { key: "bakery",  label: "Bakery",          icon: "🍞", css: "section-bakery"  },
+  { key: "snacks",  label: "Snacks",          icon: "🍿", css: "section-snacks"  },
+  { key: "drinks",  label: "Drinks",          icon: "🧃", css: "section-drinks"  },
+  { key: "pantry",  label: "Pantry",          icon: "🥫", css: "section-pantry"  },
+  { key: "meats",   label: "Meats",           icon: "🥩", css: "section-meats"   },
+  { key: "frozen",  label: "Frozen & Dairy",  icon: "🧊", css: "section-frozen"  },
+  { key: "misc",    label: "Misc",            icon: "🛒", css: "section-misc"    },
+];
+
+/** Normalise a section label from the select to a section key. */
+function sectionLabelToKey(label) {
+  const s = GROCERY_SECTIONS.find(s => s.label === label);
+  return s ? s.key : "misc";
+}
+
+function sectionKeyToLabel(key) {
+  const s = GROCERY_SECTIONS.find(s => s.key === key);
+  return s ? s.label : "Misc";
+}
+
+function renderGrocery() {
+  const items = data.groceryList.items;
+  const container = document.getElementById("grocery-sections");
+  const emptyMsg = document.getElementById("grocery-empty");
+  container.innerHTML = "";
+
+  if (items.length === 0) {
+    emptyMsg.style.display = "block";
+    return;
+  }
+  emptyMsg.style.display = "none";
+
+  GROCERY_SECTIONS.forEach(sec => {
+    // unchecked first, then checked — preserve add order within each group
+    const sectionItems = items.filter(i => i.section === sec.key);
+    if (sectionItems.length === 0) return;
+
+    const unchecked = sectionItems.filter(i => !i.checked);
+    const checked   = sectionItems.filter(i =>  i.checked);
+    const ordered   = [...unchecked, ...checked];
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "grocery-section";
+
+    const header = document.createElement("div");
+    header.className = `grocery-section-header ${sec.css}`;
+    header.innerHTML = `
+      <span class="grocery-section-icon">${sec.icon}</span>
+      <span class="grocery-section-name">${sec.label}</span>
+      <span class="grocery-section-count">${unchecked.length}/${sectionItems.length}</span>
+    `;
+    wrapper.appendChild(header);
+
+    ordered.forEach(item => {
+      const row = document.createElement("div");
+      row.className = "grocery-item" + (item.checked ? " done" : "");
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = item.checked;
+      cb.addEventListener("change", () => {
+        item.checked = cb.checked;
+        saveData(data);
+        renderGrocery();
+      });
+
+      const name = document.createElement("span");
+      name.className = "grocery-item-name";
+      name.textContent = item.name;
+
+      const del = document.createElement("button");
+      del.className = "meal-delete";
+      del.title = "Remove item";
+      del.textContent = "×";
+      del.addEventListener("click", () => {
+        data.groceryList.items = data.groceryList.items.filter(i => i.id !== item.id);
+        saveData(data);
+        renderGrocery();
+      });
+
+      row.append(cb, name, del);
+      wrapper.appendChild(row);
+    });
+
+    container.appendChild(wrapper);
+  });
+}
+
+// -- Grocery autocomplete --
+
+const groceryInput    = document.getElementById("grocery-input");
+const grocerySuggest  = document.getElementById("grocery-suggestions");
+const grocerySectionSel = document.getElementById("grocery-section-select");
+
+groceryInput.addEventListener("input", () => {
+  const q = groceryInput.value.trim().toLowerCase();
+  grocerySuggest.innerHTML = "";
+  if (q.length < 1) return;
+
+  const already = new Set(data.groceryList.items.map(i => i.name.toLowerCase()));
+  const matches = data.groceryKnown
+    .filter(k => k.name.toLowerCase().includes(q) && !already.has(k.name.toLowerCase()))
+    .slice(0, 7);
+
+  matches.forEach(k => {
+    const div = document.createElement("div");
+    div.className = "suggestion-item";
+    div.innerHTML = `${k.name} <small style="color:var(--gray-400)">${sectionKeyToLabel(k.section)}</small>`;
+    div.addEventListener("mousedown", e => {
+      e.preventDefault();
+      groceryInput.value = k.name;
+      // Pre-select the matching section in the dropdown
+      const label = sectionKeyToLabel(k.section);
+      Array.from(grocerySectionSel.options).forEach(opt => {
+        opt.selected = opt.value === label;
+      });
+      grocerySuggest.innerHTML = "";
+      addGroceryItem();
+    });
+    grocerySuggest.appendChild(div);
+  });
+});
+
+groceryInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") { grocerySuggest.innerHTML = ""; addGroceryItem(); }
+  if (e.key === "Escape") grocerySuggest.innerHTML = "";
+});
+
+document.addEventListener("click", e => {
+  if (!e.target.closest("#grocery-input") && !e.target.closest("#grocery-suggestions")) {
+    grocerySuggest.innerHTML = "";
+  }
+});
+
+document.getElementById("add-grocery-btn").addEventListener("click", () => {
+  grocerySuggest.innerHTML = "";
+  addGroceryItem();
+});
+
+function addGroceryItem() {
+  const name = groceryInput.value.trim();
+  if (!name) { groceryInput.focus(); return; }
+
+  const sectionLabel = grocerySectionSel.value;
+  if (!sectionLabel) {
+    grocerySectionSel.focus();
+    grocerySectionSel.style.borderColor = "var(--red)";
+    setTimeout(() => grocerySectionSel.style.borderColor = "", 1200);
+    return;
+  }
+
+  const sectionKey = sectionLabelToKey(sectionLabel);
+
+  // Avoid exact duplicates (case-insensitive) on active list
+  const norm = name.toLowerCase();
+  if (data.groceryList.items.some(i => i.name.toLowerCase() === norm)) {
+    groceryInput.value = "";
+    groceryInput.focus();
+    return;
+  }
+
+  data.groceryList.items.push({ id: uuid(), name, section: sectionKey, checked: false });
+
+  // Update known-items for autocomplete (upsert by name)
+  const existing = data.groceryKnown.find(k => k.name.toLowerCase() === norm);
+  if (existing) {
+    existing.section = sectionKey; // update section if they changed it
+  } else {
+    data.groceryKnown.push({ name, section: sectionKey });
+  }
+
+  saveData(data);
+  groceryInput.value = "";
+  groceryInput.focus();
+  renderGrocery();
+}
+
+// -- Clear checked --
+
+document.getElementById("clear-checked-btn").addEventListener("click", () => {
+  const checked = data.groceryList.items.filter(i => i.checked);
+  if (checked.length === 0) return;
+  openModal(
+    `Remove ${checked.length} checked item${checked.length > 1 ? "s" : ""} from the list?`,
+    () => {
+      data.groceryList.items = data.groceryList.items.filter(i => !i.checked);
+      saveData(data);
+      renderGrocery();
+    }
+  );
+});
+
+// -- New list --
+
+document.getElementById("new-list-btn").addEventListener("click", () => {
+  if (data.groceryList.items.length === 0) return;
+  openModal(
+    "Start a new grocery list? This will clear all current items.",
+    () => {
+      data.groceryList.items = [];
+      saveData(data);
+      renderGrocery();
+    }
+  );
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────
