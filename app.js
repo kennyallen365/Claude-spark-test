@@ -82,13 +82,16 @@ function loadData() {
       if (!parsed.weeklyPlans)  parsed.weeklyPlans  = [];
       if (!parsed.groceryList)  parsed.groceryList  = { items: [] };
       if (!parsed.groceryKnown) parsed.groceryKnown = [];
-      // Migrate: ensure all plans have grocerySnapshot field
+      // Migrate weeklyPlans
       parsed.weeklyPlans.forEach(p => {
         if (!("grocerySnapshot" in p)) p.grocerySnapshot = null;
+        if (!p.ratings) p.ratings = {};
       });
-      // Migrate: ensure all meals have ingredients field
+      // Migrate meals
       parsed.meals.forEach(m => {
-        if (!m.ingredients) m.ingredients = [];
+        if (!m.ingredients)          m.ingredients = [];
+        if (!("notes" in m))         m.notes       = "";
+        if (!("lastRating" in m))    m.lastRating  = null;
       });
       return parsed;
     }
@@ -125,10 +128,12 @@ function getOrCreateMeal(name) {
   const norm = name.trim().toLowerCase();
   let meal = data.meals.find(m => m.name.toLowerCase() === norm);
   if (!meal) {
-    meal = { id: uuid(), name: name.trim(), dates: [], ingredients: [] };
+    meal = { id: uuid(), name: name.trim(), dates: [], ingredients: [], notes: "", lastRating: null };
     data.meals.push(meal);
   }
-  if (!meal.ingredients) meal.ingredients = [];
+  if (!meal.ingredients)       meal.ingredients = [];
+  if (!("notes" in meal))      meal.notes       = "";
+  if (!("lastRating" in meal)) meal.lastRating  = null;
   return meal;
 }
 
@@ -154,6 +159,37 @@ function getWeekPlan(dateStr) {
   return plan;
 }
 
+// ── Suggestion & rating helpers ───────────────────────────────────────────────
+
+/** Return up to `count` overdue meals suitable for suggestions (excludes skip-rated). */
+function getMealSuggestions(excludeIds, count = 3) {
+  const thresholdDays = overdueThreshold * 7;
+  return data.meals
+    .filter(m => {
+      if (excludeIds.includes(m.id)) return false;
+      if (m.lastRating === "skip")   return false;
+      const days = daysSinceLastMade(m);
+      return days === null || days >= thresholdDays;
+    })
+    .sort((a, b) => {
+      const da = daysSinceLastMade(a);
+      const db = daysSinceLastMade(b);
+      if (da === null && db === null) return a.name.localeCompare(b.name);
+      if (da === null) return 1;   // never-made after timed-out meals
+      if (db === null) return -1;
+      return db - da;              // most overdue first
+    })
+    .slice(0, count);
+}
+
+/** Return the rating given to mealId in its most recent archived week. */
+function getMealLastRating(mealId) {
+  const plans = data.weeklyPlans
+    .filter(p => p.ratings && p.ratings[mealId])
+    .sort((a, b) => b.weekStart.localeCompare(a.weekStart));
+  return plans.length ? plans[0].ratings[mealId] : null;
+}
+
 // ── Grocery section definitions (needed by both Grocery tab and History tab) ──
 
 const GROCERY_SECTIONS = [
@@ -176,6 +212,43 @@ function sectionLabelToKey(label) {
 function sectionKeyToLabel(key) {
   const s = GROCERY_SECTIONS.find(s => s.key === key);
   return s ? s.label : "Misc";
+}
+
+// ── Notes element helper ──────────────────────────────────────────────────────
+
+/** Create a click-to-edit notes span for a meal. */
+function createNotesElement(meal) {
+  const el = document.createElement("span");
+  const hasNotes = !!(meal.notes && meal.notes.length);
+  el.className = "meal-notes" + (hasNotes ? "" : " meal-notes-empty");
+  el.textContent = hasNotes ? meal.notes : "add note...";
+  el.title = "Click to edit note";
+
+  el.addEventListener("click", e => {
+    e.stopPropagation();
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "meal-notes-input";
+    input.value = meal.notes || "";
+    input.maxLength = 150;
+    input.placeholder = "add note... (150 chars max)";
+    el.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const save = () => {
+      meal.notes = input.value.trim();
+      saveData(data);
+      const updated = createNotesElement(meal);
+      input.replaceWith(updated);
+    };
+    input.addEventListener("blur", save);
+    input.addEventListener("keydown", ev => {
+      if (ev.key === "Enter" || ev.key === "Escape") { ev.preventDefault(); save(); }
+    });
+  });
+
+  return el;
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -230,9 +303,14 @@ function renderThisWeek() {
       saveData(data);
     });
 
+    const mealInfo = document.createElement("div");
+    mealInfo.className = "meal-info";
+
     const name = document.createElement("span");
     name.className = "meal-name";
     name.textContent = meal.name;
+
+    mealInfo.append(name, createNotesElement(meal));
 
     const days = daysSinceLastMade(meal);
     const lastMadeTxt = document.createElement("span");
@@ -250,8 +328,53 @@ function renderThisWeek() {
       renderThisWeek();
     });
 
-    li.append(cb, name, lastMadeTxt, del);
+    li.append(cb, mealInfo, lastMadeTxt, del);
     list.appendChild(li);
+  });
+
+  renderMealSuggestions(plan);
+}
+
+function renderMealSuggestions(plan) {
+  const section = document.getElementById("meal-suggestions-section");
+  const cards   = document.getElementById("suggestions-cards");
+
+  if (plan.mealIds.length >= 5) { section.style.display = "none"; return; }
+
+  const suggestions = getMealSuggestions(plan.mealIds);
+  if (suggestions.length === 0) { section.style.display = "none"; return; }
+
+  section.style.display = "block";
+  cards.innerHTML = "";
+
+  suggestions.forEach(meal => {
+    const card = document.createElement("div");
+    card.className = "suggestion-card";
+
+    const info = document.createElement("div");
+    info.className = "suggestion-card-info";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "suggestion-card-name";
+    nameEl.textContent = meal.name;
+
+    const days = daysSinceLastMade(meal);
+    const lastEl = document.createElement("span");
+    lastEl.className = "suggestion-card-last";
+    lastEl.textContent = days === null ? "never made"
+                       : days === 0   ? "today"
+                       : days < 14   ? `${days}d ago`
+                       : `${Math.floor(days / 7)}w ago`;
+
+    info.append(nameEl, lastEl);
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "btn-secondary suggestion-add-btn";
+    addBtn.textContent = "+ Add";
+    addBtn.addEventListener("click", () => addMealToWeek(meal.name));
+
+    card.append(info, addBtn);
+    cards.appendChild(card);
   });
 }
 
@@ -377,7 +500,7 @@ document.getElementById("save-week-btn").addEventListener("click", () => {
       saveData(data);
       renderThisWeek();
       renderOverdue();
-      showToast("Week archived to history!");
+      openRatingModal(plan);
     }
   );
 });
@@ -434,15 +557,45 @@ function renderHistoryMeals(plan) {
     cb.checked = checked;
     cb.disabled = true;
 
+    const mealInfo = document.createElement("div");
+    mealInfo.className = "meal-info";
+
     const name = document.createElement("span");
     name.className = "meal-name";
     name.textContent = meal.name;
+
+    mealInfo.append(name, createNotesElement(meal));
 
     const badge = document.createElement("span");
     badge.className = "meal-badge " + (checked ? "badge-ok" : "badge-never");
     badge.textContent = checked ? "prepped" : "skipped";
 
-    li.append(cb, name, badge);
+    // Inline rating buttons (editable)
+    const ratingGroup = document.createElement("div");
+    ratingGroup.className = "history-rating-group";
+
+    const currentRating = plan.ratings && plan.ratings[id];
+    [{ value: "good", emoji: "👍", title: "Great" },
+     { value: "fine", emoji: "😐", title: "Fine"  },
+     { value: "skip", emoji: "👎", title: "Skip it"}].forEach(opt => {
+      const btn = document.createElement("button");
+      btn.className = "rating-btn" + (currentRating === opt.value ? " active" : "");
+      btn.dataset.rating = opt.value;
+      btn.textContent = opt.emoji;
+      btn.title = opt.title;
+      btn.addEventListener("click", () => {
+        if (!plan.ratings) plan.ratings = {};
+        plan.ratings[id] = opt.value;
+        meal.lastRating = getMealLastRating(id);
+        saveData(data);
+        ratingGroup.querySelectorAll(".rating-btn").forEach(b => {
+          b.classList.toggle("active", b.dataset.rating === opt.value);
+        });
+      });
+      ratingGroup.appendChild(btn);
+    });
+
+    li.append(cb, mealInfo, badge, ratingGroup);
     list.appendChild(li);
   });
 }
@@ -541,7 +694,7 @@ function renderOverdue() {
 
   const overdue = data.meals
     .map(meal => ({ meal, days: daysSinceLastMade(meal) }))
-    .filter(({ days }) => days === null || days >= thresholdDays)
+    .filter(({ meal, days }) => meal.lastRating !== "skip" && (days === null || days >= thresholdDays))
     .sort((a, b) => {
       if (a.days === null && b.days === null) return a.meal.name.localeCompare(b.meal.name);
       if (a.days === null) return 1;
@@ -801,6 +954,68 @@ document.getElementById("new-list-btn").addEventListener("click", () => {
   });
 });
 
+// ── Rating modal ──────────────────────────────────────────────────────────────
+
+function openRatingModal(plan) {
+  const overlay    = document.getElementById("rating-overlay");
+  const ratingList = document.getElementById("rating-list");
+  ratingList.innerHTML = "";
+
+  // Temp ratings start from any previously saved ratings for this plan
+  const tempRatings = { ...(plan.ratings || {}) };
+
+  plan.mealIds.forEach(id => {
+    const meal = getMealById(id);
+    if (!meal) return;
+
+    const row = document.createElement("div");
+    row.className = "rating-row";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "rating-meal-name";
+    nameEl.textContent = meal.name;
+
+    const btns = document.createElement("div");
+    btns.className = "rating-btns";
+
+    [{ value: "good", emoji: "👍", title: "Great" },
+     { value: "fine", emoji: "😐", title: "Fine"  },
+     { value: "skip", emoji: "👎", title: "Skip it"}].forEach(opt => {
+      const btn = document.createElement("button");
+      btn.className = "rating-btn" + (tempRatings[id] === opt.value ? " active" : "");
+      btn.textContent = opt.emoji;
+      btn.title = opt.title;
+      btn.dataset.rating = opt.value;
+      btn.addEventListener("click", () => {
+        tempRatings[id] = opt.value;
+        btns.querySelectorAll(".rating-btn").forEach(b => {
+          b.classList.toggle("active", b.dataset.rating === opt.value);
+        });
+      });
+      btns.appendChild(btn);
+    });
+
+    row.append(nameEl, btns);
+    ratingList.appendChild(row);
+  });
+
+  overlay.style.display = "flex";
+
+  document.getElementById("rating-done-btn").onclick = () => {
+    if (!plan.ratings) plan.ratings = {};
+    Object.assign(plan.ratings, tempRatings);
+    // Propagate lastRating onto each meal
+    Object.keys(tempRatings).forEach(id => {
+      const meal = getMealById(id);
+      if (meal) meal.lastRating = getMealLastRating(id);
+    });
+    saveData(data);
+    overlay.style.display = "none";
+    renderMealSuggestions(getWeekPlan(thisWeekDate));
+    showToast("Week archived!");
+  };
+}
+
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
 let modalCallback = null;
@@ -871,5 +1086,5 @@ function showToast(msg, duration = 2500) {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-console.log("[MealPlanner v4] loaded. thisWeekDate =", thisWeekDate);
+console.log("[MealPlanner v5] loaded. thisWeekDate =", thisWeekDate);
 renderThisWeek();
