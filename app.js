@@ -85,7 +85,8 @@ function loadData() {
       // Migrate weeklyPlans
       parsed.weeklyPlans.forEach(p => {
         if (!("grocerySnapshot" in p)) p.grocerySnapshot = null;
-        if (!p.ratings) p.ratings = {};
+        if (!p.ratings)               p.ratings          = {};
+        if (!("archived" in p))       p.archived         = false;
       });
       // Migrate meals
       parsed.meals.forEach(m => {
@@ -108,9 +109,10 @@ function saveData(data) {
 // ── App state ─────────────────────────────────────────────────────────────────
 
 let data = loadData();
-let thisWeekDate  = weekStart(today()); // week being viewed/edited in This Week tab
-let historyDate   = weekStart(today()); // week being viewed in History tab
-let overdueThreshold = 3;              // weeks
+let thisWeekDate      = weekStart(today()); // week being viewed/edited in This Week tab
+let historyDate       = weekStart(today()); // week being viewed in History tab
+let overdueThreshold  = 3;                 // weeks
+const collapsedSections = new Set();       // grocery section keys currently collapsed
 
 // Init historyDate to the most recent week with any plan data
 {
@@ -153,7 +155,7 @@ function daysSinceLastMade(meal) {
 function getWeekPlan(dateStr) {
   let plan = data.weeklyPlans.find(p => p.weekStart === dateStr);
   if (!plan) {
-    plan = { weekStart: dateStr, mealIds: [], checked: {}, grocerySnapshot: null };
+    plan = { weekStart: dateStr, mealIds: [], checked: {}, grocerySnapshot: null, ratings: {}, archived: false };
     data.weeklyPlans.push(plan);
   }
   return plan;
@@ -276,10 +278,26 @@ function renderThisWeek() {
   nextBtn.disabled = thisWeekDate >= currentWeek;
 
   const isCurrent = thisWeekDate === currentWeek;
-  document.getElementById("week-label").textContent =
-    "Week of " + formatWeek(thisWeekDate) + (isCurrent ? "" : " ↩");
+  document.getElementById("week-label").textContent = formatWeekRange(thisWeekDate);
+
+  // Header always shows the real current week
+  document.getElementById("header-week-range").textContent = formatWeekRange(weekStart(today()));
 
   const plan = getWeekPlan(thisWeekDate);
+
+  // Status badge
+  const badge = document.getElementById("week-status-badge");
+  if (plan.archived) {
+    badge.textContent = "Archived";
+    badge.className   = "week-status-badge badge-archived";
+  } else if (isCurrent) {
+    badge.textContent = "In Progress";
+    badge.className   = "week-status-badge badge-current";
+  } else {
+    badge.textContent = "";
+    badge.className   = "week-status-badge";
+  }
+
   const list = document.getElementById("this-week-list");
   const emptyMsg = document.getElementById("this-week-empty");
   list.innerHTML = "";
@@ -497,6 +515,7 @@ document.getElementById("save-week-btn").addEventListener("click", () => {
           if (meal && !meal.dates.includes(dateStr)) meal.dates.push(dateStr);
         }
       });
+      plan.archived = true;
       saveData(data);
       renderThisWeek();
       renderOverdue();
@@ -774,17 +793,34 @@ function renderGrocery() {
     const checked   = sectionItems.filter(i =>  i.checked);
     const ordered   = [...unchecked, ...checked];
 
-    const wrapper = document.createElement("div");
-    wrapper.className = "grocery-section";
+    const isCollapsed = collapsedSections.has(sec.key);
 
+    const wrapper = document.createElement("div");
+    wrapper.className = "grocery-section" + (isCollapsed ? " collapsed" : "");
+
+    // Header — clicking toggles collapse
     const header = document.createElement("div");
     header.className = `grocery-section-header ${sec.css}`;
     header.innerHTML = `
       <span class="grocery-section-icon">${sec.icon}</span>
       <span class="grocery-section-name">${sec.label}</span>
       <span class="grocery-section-count">${unchecked.length}/${sectionItems.length}</span>
+      <span class="grocery-section-chevron">&#9660;</span>
     `;
+    header.addEventListener("click", () => {
+      if (collapsedSections.has(sec.key)) {
+        collapsedSections.delete(sec.key);
+        wrapper.classList.remove("collapsed");
+      } else {
+        collapsedSections.add(sec.key);
+        wrapper.classList.add("collapsed");
+      }
+    });
     wrapper.appendChild(header);
+
+    // Items wrapper (hidden when collapsed via CSS)
+    const itemsWrap = document.createElement("div");
+    itemsWrap.className = "grocery-section-items";
 
     ordered.forEach(item => {
       const row = document.createElement("div");
@@ -814,9 +850,10 @@ function renderGrocery() {
       });
 
       row.append(cb, name, del);
-      wrapper.appendChild(row);
+      itemsWrap.appendChild(row);
     });
 
+    wrapper.appendChild(itemsWrap);
     container.appendChild(wrapper);
   });
 }
@@ -1086,5 +1123,5 @@ function showToast(msg, duration = 2500) {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-console.log("[MealPlanner v5] loaded. thisWeekDate =", thisWeekDate);
+console.log("[MealPlanner v6] loaded. thisWeekDate =", thisWeekDate);
 renderThisWeek();

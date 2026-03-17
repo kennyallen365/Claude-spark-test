@@ -9,7 +9,7 @@
 <body>
   <header>
     <h1>Meal Planner</h1>
-    <p class="subtitle">Weekly prep tracker for two</p>
+    <p class="subtitle"><span id="header-week-range"></span></p>
   </header>
 
   <nav class="tabs">
@@ -24,7 +24,10 @@
     <div class="week-header">
       <div class="week-nav">
         <button class="btn-icon" id="this-week-prev-btn">&#8249;</button>
-        <h2 id="week-label">Week of ...</h2>
+        <div class="week-nav-center">
+          <h2 id="week-label">Week of ...</h2>
+          <span id="week-status-badge" class="week-status-badge"></span>
+        </div>
         <button class="btn-icon" id="this-week-next-btn">&#8250;</button>
       </div>
       <button class="btn-secondary" id="clear-week-btn">Clear Week</button>
@@ -156,6 +159,6 @@
 
   <div id="toast" class="toast" aria-live="polite"></div>
 
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
