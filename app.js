@@ -93,6 +93,12 @@ function loadData() {
         if (!m.ingredients)          m.ingredients = [];
         if (!("notes" in m))         m.notes       = "";
         if (!("lastRating" in m))    m.lastRating  = null;
+        // Normalize all stored dates to their week-start Sunday and deduplicate.
+        // Previous code versions wrote today() (a weekday) instead of weekStart(),
+        // which caused stale "today" labels and incorrect Haven't Made calculations.
+        if (m.dates && m.dates.length > 0) {
+          m.dates = [...new Set(m.dates.map(d => weekStart(d)))];
+        }
       });
       return parsed;
     }
@@ -328,8 +334,12 @@ function renderThisWeek() {
         meal.dates = meal.dates.filter(d => d !== weekDateStr);
       }
 
-      // Update the last-made label in place without a full re-render
-      const d = daysSinceLastMade(meal);
+      // Update the last-made label in place without a full re-render.
+      // When checked, derive the age from the week start rather than the global
+      // last-made date, so past-week views always show the correct age.
+      const d = cb.checked
+        ? daysBetween(plan.weekStart, today())
+        : daysSinceLastMade(meal);
       lastMadeTxt.textContent = d === null ? "never" : d === 0 ? "today" : d + "d ago";
 
       saveData(data);
@@ -344,7 +354,11 @@ function renderThisWeek() {
 
     mealInfo.append(name, createNotesElement(meal));
 
-    const days = daysSinceLastMade(meal);
+    // When already checked, show days since THIS week's start rather than the
+    // global last-made date, so a past-week view always displays the correct age.
+    const days = checked
+      ? daysBetween(plan.weekStart, today())
+      : daysSinceLastMade(meal);
     const lastMadeTxt = document.createElement("span");
     lastMadeTxt.className = "last-made";
     lastMadeTxt.textContent = days === null ? "never" : days === 0 ? "today" : days + "d ago";
@@ -1137,5 +1151,5 @@ function showToast(msg, duration = 2500) {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-console.log("[MealPlanner v8] loaded. thisWeekDate =", thisWeekDate);
+console.log("[MealPlanner v9] loaded. thisWeekDate =", thisWeekDate);
 renderThisWeek();
