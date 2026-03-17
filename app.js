@@ -318,6 +318,20 @@ function renderThisWeek() {
     cb.addEventListener("change", () => {
       plan.checked[id] = cb.checked;
       li.classList.toggle("done", cb.checked);
+
+      // Record / remove today's date immediately so Haven't Made, suggestions,
+      // and the last-made label all reflect the current prep state in real time.
+      const todayStr = today();
+      if (cb.checked) {
+        if (!meal.dates.includes(todayStr)) meal.dates.push(todayStr);
+      } else {
+        meal.dates = meal.dates.filter(d => d !== todayStr);
+      }
+
+      // Update the last-made label in place without a full re-render
+      const d = daysSinceLastMade(meal);
+      lastMadeTxt.textContent = d === null ? "never" : d === 0 ? "today" : d + "d ago";
+
       saveData(data);
     });
 
@@ -1123,5 +1137,5 @@ function showToast(msg, duration = 2500) {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-console.log("[MealPlanner v6] loaded. thisWeekDate =", thisWeekDate);
+console.log("[MealPlanner v7] loaded. thisWeekDate =", thisWeekDate);
 renderThisWeek();
