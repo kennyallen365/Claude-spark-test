@@ -50,6 +50,16 @@ function formatWeek(isoDate) {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 }
 
+/** Format a week as a date range "Mar 16 – Mar 22, 2026". */
+function formatWeekRange(isoDate) {
+  const start = new Date(isoDate + "T12:00:00");
+  const end   = new Date(isoDate + "T12:00:00");
+  end.setDate(end.getDate() + 6);
+  const startStr = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const endStr   = end.toLocaleDateString("en-US",   { month: "short", day: "numeric", year: "numeric" });
+  return `${startStr} – ${endStr}`;
+}
+
 /** Absolute days between two ISO date strings. */
 function daysBetween(a, b) {
   return Math.round(Math.abs(new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) / 86400000);
@@ -75,6 +85,10 @@ function loadData() {
       // Migrate: ensure all plans have grocerySnapshot field
       parsed.weeklyPlans.forEach(p => {
         if (!("grocerySnapshot" in p)) p.grocerySnapshot = null;
+      });
+      // Migrate: ensure all meals have ingredients field
+      parsed.meals.forEach(m => {
+        if (!m.ingredients) m.ingredients = [];
       });
       return parsed;
     }
@@ -111,9 +125,10 @@ function getOrCreateMeal(name) {
   const norm = name.trim().toLowerCase();
   let meal = data.meals.find(m => m.name.toLowerCase() === norm);
   if (!meal) {
-    meal = { id: uuid(), name: name.trim(), dates: [] };
+    meal = { id: uuid(), name: name.trim(), dates: [], ingredients: [] };
     data.meals.push(meal);
   }
+  if (!meal.ingredients) meal.ingredients = [];
   return meal;
 }
 
@@ -142,6 +157,7 @@ function getWeekPlan(dateStr) {
 // ── Grocery section definitions (needed by both Grocery tab and History tab) ──
 
 const GROCERY_SECTIONS = [
+  { key: "mealingredients", label: "Meal Ingredients", icon: "🍽️", css: "section-mealingredients" },
   { key: "produce", label: "Fruit & Produce", icon: "🥦", css: "section-produce" },
   { key: "bakery",  label: "Bakery",          icon: "🍞", css: "section-bakery"  },
   { key: "snacks",  label: "Snacks",          icon: "🍿", css: "section-snacks"  },
@@ -192,7 +208,10 @@ function renderThisWeek() {
 
   const plan = getWeekPlan(thisWeekDate);
   const list = document.getElementById("this-week-list");
+  const emptyMsg = document.getElementById("this-week-empty");
   list.innerHTML = "";
+
+  emptyMsg.style.display = plan.mealIds.length === 0 ? "block" : "none";
 
   plan.mealIds.forEach(id => {
     const meal = getMealById(id);
@@ -304,6 +323,31 @@ function addMealToWeek(rawName) {
   }
   mealInput.value = "";
   renderThisWeek();
+
+  // Prompt to add ingredients to grocery list
+  openModal(
+    `Add ingredients for "${meal.name}" to grocery list?`,
+    () => {
+      const raw = document.getElementById("modal-input").value;
+      const ingredients = raw.split(",").map(s => s.trim()).filter(Boolean);
+      if (ingredients.length > 0) {
+        meal.ingredients = ingredients;
+        ingredients.forEach(ing => {
+          const norm = ing.toLowerCase();
+          if (!data.groceryList.items.some(i => i.name.toLowerCase() === norm)) {
+            data.groceryList.items.push({ id: uuid(), name: ing, section: "mealingredients", checked: false });
+          }
+        });
+        saveData(data);
+      }
+    },
+    {
+      inputPlaceholder: "e.g. chicken, bell pepper, soy sauce",
+      inputValue: meal.ingredients.join(", "),
+      confirmLabel: "Add to Grocery",
+      cancelLabel: "Skip",
+    }
+  );
 }
 
 document.getElementById("clear-week-btn").addEventListener("click", () => {
@@ -319,9 +363,9 @@ document.getElementById("clear-week-btn").addEventListener("click", () => {
 
 document.getElementById("save-week-btn").addEventListener("click", () => {
   const plan = getWeekPlan(thisWeekDate);
-  if (plan.mealIds.length === 0) { alert("Add some meals before saving!"); return; }
+  if (plan.mealIds.length === 0) { alert("Add some meals before archiving!"); return; }
   openModal(
-    `Save week of ${formatWeek(thisWeekDate)} to history? Records today's date for all checked meals.`,
+    `Archive week of ${formatWeek(thisWeekDate)} to history? Records today's date for all checked meals.`,
     () => {
       const dateStr = today();
       plan.mealIds.forEach(id => {
@@ -333,6 +377,7 @@ document.getElementById("save-week-btn").addEventListener("click", () => {
       saveData(data);
       renderThisWeek();
       renderOverdue();
+      showToast("Week archived to history!");
     }
   );
 });
@@ -347,7 +392,7 @@ function renderHistory() {
   prevBtn.disabled = false;
   nextBtn.disabled = historyDate >= currentWeek;
 
-  document.getElementById("history-week-label").textContent = "Week of " + formatWeek(historyDate);
+  document.getElementById("history-week-label").textContent = formatWeekRange(historyDate);
 
   const plan = data.weeklyPlans.find(p => p.weekStart === historyDate) || null;
   const view = document.getElementById("history-view-select").value;
@@ -759,28 +804,72 @@ document.getElementById("new-list-btn").addEventListener("click", () => {
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
 let modalCallback = null;
+let modalCancelCallback = null;
 
-function openModal(message, onConfirm) {
+/**
+ * @param {string} message
+ * @param {Function} onConfirm
+ * @param {{ inputPlaceholder?: string, inputValue?: string,
+ *           confirmLabel?: string, cancelLabel?: string,
+ *           onCancel?: Function }} [opts]
+ */
+function openModal(message, onConfirm, opts = {}) {
   document.getElementById("modal-message").textContent = message;
+
+  const inputWrap = document.getElementById("modal-input-wrap");
+  const input     = document.getElementById("modal-input");
+  if (opts.inputPlaceholder !== undefined) {
+    inputWrap.style.display = "block";
+    input.placeholder = opts.inputPlaceholder || "";
+    input.value       = opts.inputValue       || "";
+    setTimeout(() => input.focus(), 60);
+  } else {
+    inputWrap.style.display = "none";
+    input.value = "";
+  }
+
+  document.getElementById("modal-confirm").textContent = opts.confirmLabel || "Confirm";
+  document.getElementById("modal-cancel").textContent  = opts.cancelLabel  || "Cancel";
+
   document.getElementById("modal-overlay").style.display = "flex";
-  modalCallback = onConfirm;
+  modalCallback       = onConfirm;
+  modalCancelCallback = opts.onCancel || null;
 }
 
 function closeModal() {
   document.getElementById("modal-overlay").style.display = "none";
-  modalCallback = null;
+  document.getElementById("modal-confirm").textContent = "Confirm";
+  document.getElementById("modal-cancel").textContent  = "Cancel";
+  document.getElementById("modal-input-wrap").style.display = "none";
+  document.getElementById("modal-input").value = "";
+  modalCallback       = null;
+  modalCancelCallback = null;
 }
 
 document.getElementById("modal-confirm").addEventListener("click", () => {
   if (modalCallback) modalCallback();
   closeModal();
 });
-document.getElementById("modal-cancel").addEventListener("click", closeModal);
+document.getElementById("modal-cancel").addEventListener("click", () => {
+  if (modalCancelCallback) modalCancelCallback();
+  closeModal();
+});
 document.getElementById("modal-overlay").addEventListener("click", e => {
   if (e.target === document.getElementById("modal-overlay")) closeModal();
 });
 
+// ── Toast ──────────────────────────────────────────────────────────────────────
+
+let _toastTimer = null;
+function showToast(msg, duration = 2500) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove("show"), duration);
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-console.log("[MealPlanner v3] loaded. thisWeekDate =", thisWeekDate);
+console.log("[MealPlanner v4] loaded. thisWeekDate =", thisWeekDate);
 renderThisWeek();
