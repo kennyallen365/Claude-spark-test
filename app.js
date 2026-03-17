@@ -319,13 +319,13 @@ function renderThisWeek() {
       plan.checked[id] = cb.checked;
       li.classList.toggle("done", cb.checked);
 
-      // Record / remove today's date immediately so Haven't Made, suggestions,
-      // and the last-made label all reflect the current prep state in real time.
-      const todayStr = today();
+      // Record / remove the week-start date immediately so Haven't Made,
+      // suggestions, and the last-made label all reflect the prep state in real time.
+      const weekDateStr = plan.weekStart;
       if (cb.checked) {
-        if (!meal.dates.includes(todayStr)) meal.dates.push(todayStr);
+        if (!meal.dates.includes(weekDateStr)) meal.dates.push(weekDateStr);
       } else {
-        meal.dates = meal.dates.filter(d => d !== todayStr);
+        meal.dates = meal.dates.filter(d => d !== weekDateStr);
       }
 
       // Update the last-made label in place without a full re-render
@@ -520,9 +520,9 @@ document.getElementById("save-week-btn").addEventListener("click", () => {
   const plan = getWeekPlan(thisWeekDate);
   if (plan.mealIds.length === 0) { alert("Add some meals before archiving!"); return; }
   openModal(
-    `Archive week of ${formatWeek(thisWeekDate)} to history? Records today's date for all checked meals.`,
+    `Archive week of ${formatWeek(thisWeekDate)} to history? Records the week start date for all checked meals.`,
     () => {
-      const dateStr = today();
+      const dateStr = plan.weekStart;
       plan.mealIds.forEach(id => {
         if (plan.checked[id]) {
           const meal = getMealById(id);
@@ -1137,5 +1137,5 @@ function showToast(msg, duration = 2500) {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-console.log("[MealPlanner v7] loaded. thisWeekDate =", thisWeekDate);
+console.log("[MealPlanner v8] loaded. thisWeekDate =", thisWeekDate);
 renderThisWeek();
